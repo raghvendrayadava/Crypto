@@ -30,6 +30,8 @@ log = logging.getLogger(__name__)
 
 CandleCallback = Callable[[str, "Candle"], None]
 MASTER_URL = "https://assets.upstox.com/market-quote/instruments/exchange/{exch}.json.gz"
+WING_SEARCH_EXTRA = 2          # how many strikes farther out to look for a liquid protective wing
+WING_MIN_PREMIUM = 0.05         # far-OTM hedges are legitimately cheap
 STALE_STREAM_SECONDS = 90.0
 POLL_INTERVAL_SECONDS = 20.0
 CLOSE_GRACE_SECONDS = 2.0
@@ -107,8 +109,8 @@ class OptionQuote:
             return (self.ask - self.bid) / self.mid
         return 0.0                      # unknown depth: don't penalise
 
-    def is_liquid(self) -> bool:
-        return (self.ltp >= cfg.MIN_OPTION_PREMIUM
+    def is_liquid(self, min_premium: float = cfg.MIN_OPTION_PREMIUM) -> bool:
+        return (self.ltp >= min_premium
                 and self.volume >= cfg.MIN_OPTION_VOLUME
                 and self.spread_pct <= cfg.MAX_OPTION_SPREAD_PCT)
 
@@ -716,16 +718,25 @@ def select_credit_spread(chain: OptionChain, kind: str, boundary: float,
         if not cand:
             return None
         short_k = max(cand)
-        idx = strikes.index(short_k) - width_strikes
+        direction = -1
     else:
         cand = [k for k in strikes if k >= boundary and side[k].is_liquid()]
         if not cand:
             return None
         short_k = min(cand)
-        idx = strikes.index(short_k) + width_strikes
-    if idx < 0 or idx >= len(strikes):
+        direction = 1
+    # Protective wing: `width_strikes` away, or further out (up to 2 extra strikes) until it is liquid.
+    base = strikes.index(short_k)
+    long_k = None
+    for extra in range(WING_SEARCH_EXTRA + 1):
+        idx = base + direction * (width_strikes + extra)
+        if idx < 0 or idx >= len(strikes):
+            break
+        if side[strikes[idx]].is_liquid(min_premium=WING_MIN_PREMIUM):
+            long_k = strikes[idx]
+            break
+    if long_k is None:
         return None
-    long_k = strikes[idx]
     short_q, long_q = side[short_k], side[long_k]
     if long_q.ltp <= 0 or short_q.ltp <= long_q.ltp:
         return None

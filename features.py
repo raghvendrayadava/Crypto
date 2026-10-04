@@ -128,6 +128,27 @@ def session_covariates(times: Sequence[dt.datetime], exchange: str,
     return out
 
 
+def future_bar_times(last_start: dt.datetime, horizon: int, exchange: str) -> list[dt.datetime]:
+    """Start times of the next ``horizon`` *trading* bars.
+
+    Steps are 5 minutes within a session; once a step would reach the exchange close it rolls to the
+    next weekday's open, exactly how the (gap-shielded) history is laid out.
+    """
+    s = cfg.SESSIONS[exchange]
+    step = dt.timedelta(minutes=cfg.CANDLE_MINUTES)
+    out: list[dt.datetime] = []
+    t = last_start
+    for _ in range(horizon):
+        t = t + step
+        if t.time() >= s.close:
+            d = t.date() + dt.timedelta(days=1)
+            while d.weekday() >= 5:
+                d += dt.timedelta(days=1)
+            t = dt.datetime.combine(d, s.open, tzinfo=t.tzinfo)
+        out.append(t)
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Bundle handed to the model worker
 # --------------------------------------------------------------------------- #
@@ -169,8 +190,7 @@ def build_features(symbol: str, exchange: str, candles: Sequence[Candle], calend
         return None
     hi = np.array([c.high for c in candles]); lo = np.array([c.low for c in candles])
     pv = parkinson_vol(hi, lo)
-    step = dt.timedelta(minutes=cfg.CANDLE_MINUTES)
-    times = [c.start for c in candles] + [last.start + step * k for k in range(1, horizon + 1)]
+    times = [c.start for c in candles] + future_bar_times(last.start, horizon, exchange)
     cov = session_covariates(times, exchange, calendar.is_expiry)
     return FeatureBundle(
         symbol=symbol, exchange=exchange, bar_start=last.start, anchor_price=last.close,

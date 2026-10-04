@@ -112,7 +112,8 @@ def test_build_features_shapes():
     n = len(fb.target)
     assert fb.past_only.shape == (1, n) and fb.past_future.shape == (3, n + 12)
     assert fb.target[-1] == 0 and fb.target.dtype == np.float32
-    assert fb.spot_is_expiry and fb.past_future[2, -1] == 1.0
+    assert fb.spot_is_expiry and fb.past_future[2, n - 1] == 1.0
+    assert fb.past_future[2, -1] == 0.0                              # horizon rolled into the next session
     assert build_features("NIFTY", "NSE", cs[:10], cal) is None
 
 
@@ -389,3 +390,32 @@ def test_dashboard_state_and_http(rig):
         assert json.loads(urllib.request.urlopen(base + "/api/state").read())["backend"] == "mock"
     finally:
         srv.stop()
+
+
+# ------------------------------------------------------------------ review fixes
+def test_future_bar_times_roll_to_next_session():
+    from features import future_bar_times
+    ts = future_bar_times(at(15, 20), 4, "NSE")                     # Tue 15:20 -> 15:25, then next session
+    assert ts[0] == at(15, 25) and ts[1] == at(9, 15, day=7) and ts[3] == at(9, 25, day=7)
+    fri = dt.datetime(2026, 10, 9, 15, 25, tzinfo=IST)               # Friday close -> Monday open
+    assert future_bar_times(fri, 1, "NSE")[0] == dt.datetime(2026, 10, 12, 9, 15, tzinfo=IST)
+    inside = future_bar_times(at(10, 0), 12, "NSE")
+    assert inside[-1] == at(11, 0)
+
+
+def test_late_entry_rejected_when_horizon_leaves_session(rig):
+    feed, clock, db, eng = rig
+    clock.t = at(14, 40)
+    eng.handle_prediction(pred(bar_start=at(14, 35), vol_spread=8.0))
+    eng.handle_prediction(pred(bar_start=at(14, 35)))
+    assert not eng.positions and "beyond session close" in eng.rejections[-1]
+
+
+def test_condor_wing_must_be_liquid():
+    ch = make_chain(strikes=range(60, 125, 5))
+    ch.puts[80.0].volume = 0                                         # default wing (short 90 -> long 80) is illiquid
+    short, long_ = select_credit_spread(ch, "PE", boundary=92.0, width_strikes=2)
+    assert short.strike == 90 and long_.strike == 75 and long_.is_liquid(min_premium=0.05)
+    for k in (80.0, 75.0, 70.0):
+        ch.puts[k].volume = 0
+    assert select_credit_spread(ch, "PE", boundary=92.0, width_strikes=2) is None

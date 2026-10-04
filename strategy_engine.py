@@ -343,6 +343,9 @@ class StrategyEngine(threading.Thread):
             return self._skip(pred.symbol, "outside entry window")
         if now - pred.bar_start > dt.timedelta(minutes=cfg.CANDLE_MINUTES * 3):
             return self._skip(pred.symbol, "stale prediction")
+        horizon_end = pred.bar_start + dt.timedelta(minutes=cfg.CANDLE_MINUTES * (pred.horizon + 1))
+        if horizon_end.time() > cfg.SESSIONS[spec.exchange].close:
+            return self._skip(pred.symbol, "forecast horizon extends beyond session close")
         if now < self._cooldown_until.get(pred.symbol, now):
             return self._skip(pred.symbol, "cooldown")
         sig = evaluate_signal(pred, prior)
