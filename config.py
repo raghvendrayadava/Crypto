@@ -187,3 +187,6 @@ class RuntimeOptions:
     symbols: tuple[str, ...] = field(default_factory=lambda: tuple(s.symbol for s in UNIVERSE))
     log_level: str = "INFO"
     flatten_on_exit: bool = True
+    dashboard: bool = True
+    dashboard_host: str = "127.0.0.1"
+    dashboard_port: int = 8050

@@ -10,6 +10,7 @@ import datetime as dt
 from typing import Optional
 
 import config as cfg
+from dashboard import DashboardServer
 from features import ExpiryCalendar, build_features
 from model_worker import Backend, InferenceWorker, MockBackend, TimesFMBackend
 from strategy_engine import StrategyEngine, TradeDB
@@ -51,6 +52,10 @@ class Bot:
         if opts.mock_model:
             log.warning("MOCK model backend in use - signals are NOT from TimesFM-3")
         self.worker = InferenceWorker(backend, self.engine.on_prediction)
+        self.dashboard: Optional[DashboardServer] = None
+        if opts.dashboard:
+            self.dashboard = DashboardServer(self.engine, self.feed, self.db, backend.name,
+                                             opts.dashboard_host, opts.dashboard_port)
 
     # Called on the WebSocket / watchdog thread: must stay cheap and non-blocking.
     def on_candle_close(self, symbol: str, candle: Candle) -> None:
@@ -67,6 +72,8 @@ class Bot:
         self.worker.submit(bundle)
 
     def run(self) -> None:
+        if self.dashboard:
+            self.dashboard.start()
         self.worker.start()
         self.engine.start()
         self.feed.bootstrap_history()
@@ -89,6 +96,8 @@ class Bot:
             log.warning("Flattening open paper positions before exit (no overnight holding)")
             self.engine.flatten_all("SHUTDOWN")
         self.worker.stop()
+        if self.dashboard:
+            self.dashboard.stop()
         log.info("Final: %s", self.engine.status())
         self.db.close()
 
@@ -100,12 +109,18 @@ def parse_args(argv: Optional[list[str]] = None) -> cfg.RuntimeOptions:
     p.add_argument("--symbols", nargs="+", default=[s.symbol for s in cfg.UNIVERSE],
                    help="subset of: " + " ".join(s.symbol for s in cfg.UNIVERSE))
     p.add_argument("--log-level", default="INFO")
+    p.add_argument("--no-dashboard", action="store_true", help="do not start the monitoring web UI")
+    p.add_argument("--dashboard-host", default="127.0.0.1",
+                   help="bind address (default localhost; the UI has no authentication)")
+    p.add_argument("--dashboard-port", type=int, default=8050)
     a = p.parse_args(argv)
     unknown = set(a.symbols) - set(cfg.SPEC_BY_SYMBOL)
     if unknown:
         p.error(f"unknown symbols: {sorted(unknown)}")
     return cfg.RuntimeOptions(mock_model=a.mock_model, poll_only=a.poll_only,
-                              symbols=tuple(a.symbols), log_level=a.log_level.upper())
+                              symbols=tuple(a.symbols), log_level=a.log_level.upper(),
+                              dashboard=not a.no_dashboard, dashboard_host=a.dashboard_host,
+                              dashboard_port=a.dashboard_port)
 
 
 def main(argv: Optional[list[str]] = None) -> int:

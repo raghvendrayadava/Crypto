@@ -361,3 +361,31 @@ def test_make_prediction_maps_z_to_price():
     p = make_prediction(fb, z, 0.1, "t")
     assert p.q50 == pytest.approx(fb.anchor_price)
     assert p.q90 == pytest.approx(fb.anchor_price * np.exp(0.01))
+
+
+# ------------------------------------------------------------------ dashboard
+def test_dashboard_state_and_http(rig):
+    import json
+    import urllib.request
+    from dashboard import DashboardServer, build_state
+
+    feed, clock, db, eng = rig
+    feed.health = lambda: {"stream_open": True, "poll_only": False, "msg_age_s": 1.0,
+                           "symbols": [{"symbol": "TEST", "price": 100.0, "candles": 80, "tick_age_s": 1.0}]}
+    eng.handle_prediction(pred(vol_spread=8.0))
+    eng.handle_prediction(pred())
+    clock.t = at(10, 20)
+    feed.reprice(eng.positions["TEST"].stop_underlying - 0.1)
+    eng.manage_positions()                                          # one closed trade
+    eng.handle_prediction(pred(bar_start=at(10, 15)))
+    st = build_state(eng, feed, db, "mock")
+    assert st["trades"][0]["status"] == "CLOSED" and st["predictions"][0]["symbol"] == "TEST"
+    assert st["sessions"]["NSE"]["state"] == "trading" and st["today"]["closed"] == 1
+    srv = DashboardServer(eng, feed, db, "mock", port=0)
+    srv.start()
+    try:
+        base = f"http://127.0.0.1:{srv._httpd.server_address[1]}"
+        assert b"Paper Trading Monitor" in urllib.request.urlopen(base + "/").read()
+        assert json.loads(urllib.request.urlopen(base + "/api/state").read())["backend"] == "mock"
+    finally:
+        srv.stop()

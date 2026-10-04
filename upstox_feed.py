@@ -561,6 +561,16 @@ class UpstoxFeed:
         px = self.last_price(u.instrument_key)
         return px or (self.builders[symbol].last_price or None)
 
+    def health(self) -> dict:
+        """Per-symbol feed diagnostics for the dashboard."""
+        now = time.monotonic()
+        syms = []
+        for sym, b in self.builders.items():
+            syms.append({"symbol": sym, "price": b.last_price or None, "candles": len(b.closed_candles()),
+                         "tick_age_s": (now - b.last_tick_at) if b.last_tick_at else None})
+        return {"stream_open": self._stream_open.is_set(), "poll_only": self.poll_only,
+                "msg_age_s": (now - self._last_msg) if self._last_msg else None, "symbols": syms}
+
     # ------------------------------------------------------------------ #
     # Calendar helpers
     # ------------------------------------------------------------------ #

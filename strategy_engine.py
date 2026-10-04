@@ -292,6 +292,7 @@ class StrategyEngine(threading.Thread):
         self._cooldown_until: dict[str, dt.datetime] = {}
         self._last_snapshot = dt.datetime.min.replace(tzinfo=cfg.IST)
         self.rejections: list[str] = []                        # last few skip reasons (diagnostics)
+        self.latest_preds: dict[str, Prediction] = {}
 
     # ---- public API ----------------------------------------------------- #
     def on_prediction(self, pred: Prediction) -> None:
@@ -328,6 +329,7 @@ class StrategyEngine(threading.Thread):
     def handle_prediction(self, pred: Prediction) -> None:
         now = self.clock()
         self.db.log_prediction(now, pred)
+        self.latest_preds[pred.symbol] = pred
         hist = self._spread_hist.setdefault(pred.symbol, [])
         prior = list(hist)
         hist.append(pred.vol_spread)
@@ -528,3 +530,43 @@ class StrategyEngine(threading.Thread):
         for p in self.positions.values():
             parts.append(f"{p.symbol}:{p.setup}:Rs{p.pnl():+.0f}")
         return " | ".join(parts)
+
+    def snapshot(self) -> dict:
+        """JSON-friendly view for the dashboard (safe to call from another thread)."""
+        now = self.clock()
+        eq = self.equity
+        cat_margin = {c: 0.0 for c in cfg.CATEGORIES}
+        positions = []
+        for p in list(self.positions.values()):
+            cat_margin[p.category] = cat_margin.get(p.category, 0.0) + p.margin
+            positions.append({
+                "symbol": p.symbol, "category": p.category, "setup": p.setup, "direction": p.direction,
+                "lots": p.lots, "expiry": p.expiry.isoformat(), "opened_at": p.opened_at.isoformat(),
+                "pnl": p.pnl(), "risk_limit": p.risk_limit, "risk_at_stop": p.risk_at_stop, "margin": p.margin,
+                "entry_underlying": p.entry_underlying, "stop": p.stop_underlying, "target": p.target_underlying,
+                "peak_pnl": p.peak_pnl, "pnl_floor": p.pnl_floor, "reason": p.notes.get("reason", ""),
+                "legs": [{"symbol": l.trading_symbol, "side": l.side, "qty": l.qty, "entry": l.entry_px,
+                          "last": l.last_px, "pnl": l.pnl(l.last_px)} for l in p.legs],
+            })
+        preds = []
+        for sym, pr in list(self.latest_preds.items()):
+            preds.append({"symbol": sym, "bar_start": pr.bar_start.isoformat(), "anchor": pr.anchor_price,
+                          "q10": pr.q10, "q50": pr.q50, "q90": pr.q90, "drift": pr.expected_drift,
+                          "spread": pr.vol_spread, "atr20": pr.atr20, "backend": pr.backend,
+                          "latency_s": pr.latency_s, "expiry_day": pr.is_expiry_day})
+        sessions = {}
+        for name, s in cfg.SESSIONS.items():
+            t = now.time()
+            state = ("closed" if now.weekday() >= 5 or t < s.open or t >= s.close else
+                     "squared-off" if t >= s.square_off else
+                     "pre-entry (cold start)" if t < s.first_entry else
+                     "no new entries" if t >= s.last_entry else "trading")
+            sessions[name] = {"state": state, "square_off": s.square_off.strftime("%H:%M")}
+        return {
+            "now": now.isoformat(), "capital": cfg.CAPITAL, "equity": eq, "realized": self.realized,
+            "unrealized": eq - cfg.CAPITAL - self.realized,
+            "risk_per_trade": cfg.MAX_RISK_PER_TRADE * eq,
+            "margin_cap": cfg.MAX_MARGIN_PER_CATEGORY * eq, "margin_used": cat_margin,
+            "positions": positions, "predictions": preds, "rejections": list(self.rejections),
+            "sessions": sessions,
+        }

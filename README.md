@@ -8,6 +8,7 @@ upstox_feed.py     -> ticks -> 5m candles ──┐ (WebSocket thread, never blo
 features.py        <- candles: z=ln(P/P_anchor), gap-shielded, covariates
 model_worker.py    -> dedicated GPU thread, fp16, batched TimesFM-3 inference -> Prediction(q10,q50,q90,...)
 strategy_engine.py -> signals, sizing, paper fills, trailing, square-off, SQLite (paper_trades.db)
+dashboard.py       -> live monitoring web UI (stdlib http server thread)
 main.py            -> wires it all together
 ```
 
@@ -18,6 +19,7 @@ echo "<your Upstox access token>" > upstox.txt     # git-ignored; stripped of wh
 python main.py                           # live data + TimesFM-3 (needs GPU + HF access to the weights)
 python main.py --mock-model              # wiring test without GPU/weights (signals are NOT TimesFM)
 python main.py --symbols NIFTY CRUDEOIL --poll-only
+python main.py --dashboard-port 8050     # UI at http://127.0.0.1:8050 (default; --no-dashboard to disable)
 pytest tests                             # offline unit/integration tests
 ```
 Upstox tokens expire daily — refresh `upstox.txt` each morning. TimesFM-3 weights are licensed
@@ -50,3 +52,11 @@ the per-bar ATR20 scaled by √H.
 * Exchange holidays and special sessions (Muhurat) are not modelled.
 * Option-chain endpoint support for MCX underlyings is assumed; a master+quote fallback is built in.
 * Paper fills at LTP±0.1 % understate real-world spread/impact in illiquid strikes.
+
+## Dashboard
+Starts with the bot at `http://127.0.0.1:8050` (auto-refresh every 3 s; light/dark follows the OS, with a toggle).
+Shows equity / P&L / closed-trade KPIs, today's equity curve, margin used vs. the 30 % cap per category,
+open positions (legs, stop, target, trail floor), the latest q10/q50/q90 forecasts, recent trades,
+feed health (stale-tick warnings), recent skipped signals and session state (cold start / trading / squared-off).
+JSON is available at `/api/state`. It has **no authentication**, so it binds to localhost; only change
+`--dashboard-host` on a network you trust.
