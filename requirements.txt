@@ -1,0 +1,8 @@
+upstox-python-sdk>=2.30
+requests
+numpy>=1.26
+torch>=2.0            # install the CUDA build matching your driver (GTX 1660 Ti: CUDA 11.8/12.x wheels)
+timesfm[torch]>=3.0.2 # provides the `timesfm3` package (google/timesfm-3.0-pytorch weights)
+huggingface_hub
+safetensors
+pytest                # tests only
