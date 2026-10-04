@@ -1,0 +1,6 @@
+upstox.txt
+paper_trades.db*
+.cache/
+__pycache__/
+*.pyc
+.pytest_cache/
